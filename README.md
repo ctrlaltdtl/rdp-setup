@@ -40,4 +40,4 @@ sudo journalctl -u xrdp -n 50
 | Linux   | xfreerdp                      | `xfreerdp /v:<IP> /port:<PORT>`        |
 
 ## License
-GPL v2.0 or later
+GNU GPL v3.0 or later

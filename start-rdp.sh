@@ -78,6 +78,19 @@ get_rfc1918_ip() {
     | head -n1
 }
 
+# Normalize port value from xrdp.ini — strips non-numeric suffixes
+# e.g. "3389-1-1ask5900ask3389" → "3389"
+get_current_port() {
+  local raw
+  raw=$(grep -E '^port=' "$XRDP_CONFIG" 2>/dev/null \
+    | head -n1 \
+    | cut -d= -f2 \
+    | tr -d '[:space:]' \
+    || echo "3389")
+  # Extract only the leading numeric portion
+  echo "$raw" | grep -oE '^[0-9]+' || echo "3389"
+}
+
 print_connection_info() {
   local ip="$1"
   local port="$2"
@@ -85,33 +98,28 @@ print_connection_info() {
   local uptime="$4"
 
   echo ""
-  echo "╔══════════════════════════════════════════════════════╗"
-  echo "║               RDP Server Status                     ║"
-  echo "╠══════════════════════════════════════════════════════╣"
-  printf  "║  Server IP   : %-37s║\n" "$ip"
-  printf  "║  Port        : %-37s║\n" "$port"
-  printf  "║  xrdp status : %-37s║\n" "$status"
-  printf  "║  Uptime      : %-37s║\n" "$uptime"
-  printf  "║  Log file    : %-37s║\n" "$LOG_FILE"
-  echo "╠══════════════════════════════════════════════════════╣"
-  echo "║  Client Connection Commands:                         ║"
-  echo "╠══════════════════════════════════════════════════════╣"
-  printf  "║  Windows : mstsc /v:%s:%s%-*s║\n" \
-    "$ip" "$port" $((31 - ${#ip} - ${#port})) ""
-  printf  "║  macOS   : Add PC in Microsoft Remote Desktop     ║"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  RDP Server Status"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  Server IP   : $ip"
+  echo "  Port        : $port"
+  echo "  xrdp status : $status"
+  echo "  Uptime      : $uptime"
+  echo "  Log file    : $LOG_FILE"
   echo ""
-  printf  "║            Host: %s:%s%-*s║\n" \
-    "$ip" "$port" $((35 - ${#ip} - ${#port})) ""
-  printf  "║  Linux   : xfreerdp /v:%s /port:%s%-*s║\n" \
-    "$ip" "$port" $((22 - ${#ip} - ${#port})) ""
-  echo "╠══════════════════════════════════════════════════════╣"
-  echo "║  On-demand commands:                                 ║"
-  printf  "║  %-51s║\n" "sudo start-rdp --status"
-  printf  "║  %-51s║\n" "sudo start-rdp --restart"
-  printf  "║  %-51s║\n" "sudo start-rdp --wait"
-  printf  "║  %-51s║\n" "sudo start-rdp --port 3390"
-  printf  "║  %-51s║\n" "sudo start-rdp --restart --port 3390"
-  echo "╚══════════════════════════════════════════════════════╝"
+  echo "  Client Connection Commands:"
+  echo "  Windows : mstsc /v:$ip:$port"
+  echo "  macOS   : Add PC in Microsoft Remote Desktop"
+  echo "            Host: $ip:$port"
+  echo "  Linux   : xfreerdp /v:$ip /port:$port"
+  echo ""
+  echo "  On-demand commands:"
+  echo "  sudo start-rdp --status"
+  echo "  sudo start-rdp --restart"
+  echo "  sudo start-rdp --wait"
+  echo "  sudo start-rdp --port 3390"
+  echo "  sudo start-rdp --restart --port 3390"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
 }
 
@@ -183,29 +191,31 @@ while true; do
   ((attempt++))
 done
 
-# ── Port config ────────────────────────────────────────────────────────────
-CURRENT_PORT=$(grep -E '^port=' "$XRDP_CONFIG" 2>/dev/null \
-  | cut -d= -f2 | tr -d '[:space:]' || echo "3389")
+# ── Port config — normalized ───────────────────────────────────────────────
+CURRENT_PORT=$(get_current_port)
 
 if [[ "$RDP_PORT" != "$CURRENT_PORT" ]]; then
   log "🔧 Updating xrdp port: $CURRENT_PORT → $RDP_PORT"
-  sudo sed -i "s/^port=.*/port=$RDP_PORT/" "$XRDP_CONFIG"
+  # Only update the first (global) port= line, not session-type sections
+  sed -i "0,/^port=/{s/^port=.*/port=$RDP_PORT/}" "$XRDP_CONFIG"
+  # Ensure [Xorg] stays at -1 for sesman dynamic port assignment
+  sed -i '/^\[Xorg\]/,/^\[/{s/^port=.*/port=-1/}' "$XRDP_CONFIG"
   FORCE_RESTART=true
 else
-  log "🔧 xrdp port already set to $RDP_PORT — no change needed"
+  log "🔧 xrdp port: $RDP_PORT — no change needed"
 fi
 
 # ── Firewall ───────────────────────────────────────────────────────────────
 log "🔒 Configuring firewall for port $RDP_PORT..."
 if command -v ufw &>/dev/null; then
   if [[ "$RDP_PORT" != "$CURRENT_PORT" ]]; then
-    if sudo ufw status | grep -q "${CURRENT_PORT}/tcp"; then
-      sudo ufw delete allow "${CURRENT_PORT}/tcp" >> "$LOG_FILE" 2>&1
+    if ufw status | grep -q "${CURRENT_PORT}/tcp"; then
+      ufw delete allow "${CURRENT_PORT}/tcp" >> "$LOG_FILE" 2>&1
       log "   ufw: removed old rule for port $CURRENT_PORT"
     fi
   fi
-  if ! sudo ufw status | grep -q "${RDP_PORT}/tcp"; then
-    sudo ufw allow "${RDP_PORT}/tcp" >> "$LOG_FILE" 2>&1
+  if ! ufw status | grep -q "${RDP_PORT}/tcp"; then
+    ufw allow "${RDP_PORT}/tcp" >> "$LOG_FILE" 2>&1
     log "   ufw: rule added for port $RDP_PORT"
   else
     log "   ufw: rule already exists for port $RDP_PORT"
@@ -217,12 +227,12 @@ fi
 # ── xrdp service ───────────────────────────────────────────────────────────
 if [[ "$FORCE_RESTART" == true ]]; then
   log "🔄 Restarting xrdp..."
-  sudo systemctl restart xrdp
+  systemctl restart xrdp
 elif systemctl is-active --quiet xrdp; then
   log "✅ xrdp is already running"
 else
   log "⚙️  Starting xrdp..."
-  sudo systemctl start xrdp
+  systemctl start xrdp
 fi
 
 sleep 2
@@ -234,7 +244,7 @@ if [[ "$STATUS" != "active" ]]; then
 fi
 
 # ── Cache IP:PORT ──────────────────────────────────────────────────────────
-echo "$RFC1918_IP:$RDP_PORT" | sudo tee "$IP_CACHE" > /dev/null
+echo "$RFC1918_IP:$RDP_PORT" | tee "$IP_CACHE" > /dev/null
 
 XRDP_UPTIME=$(systemctl show xrdp --property=ActiveEnterTimestamp \
   | cut -d= -f2 \

@@ -1,9 +1,9 @@
-# xRDP Auto-start Setup
+# xRDP Auto-start Setup v2
 Ubuntu 22.04 — xfce4 + xrdp with RFC1918 IP detection
 
 ## Files
 - `install-rdp.sh` — One-shot installer (run this first)
-- `start-rdp.sh`   — RDP management script (installed by installer)
+- `start-rdp.sh`   — RDP management script (installed automatically)
 
 ## Installation
 
@@ -11,6 +11,21 @@ Ubuntu 22.04 — xfce4 + xrdp with RFC1918 IP detection
 chmod +x install-rdp.sh start-rdp.sh
 sudo ./install-rdp.sh
 ```
+
+## What the installer does
+
+1. **Pre-flight checks** — verifies internet, fixes commented-out apt sources,
+   removes stale local file:/ apt entries and empty /apt directories
+2. Installs xrdp, xfce4, xfce4-goodies, xorgxrdp (skips dbus-x11 if unavailable)
+3. Configures xfce4 as the default RDP session
+4. Adds xrdp and the installing user to the ssl-cert group
+5. **Normalizes xrdp.ini port** — strips non-numeric suffixes from port value
+6. Installs start-rdp.sh to /opt/rdp/ with a /usr/local/bin/start-rdp symlink
+7. Installs and enables the xrdp-autostart systemd service
+8. Configures sudoers for passwordless start-rdp execution
+9. Sets up the log file at /var/log/start-rdp.log
+10. Enables and starts xrdp
+11. Runs initial IP detection and prints connection info
 
 ## Usage
 
@@ -39,5 +54,19 @@ sudo journalctl -u xrdp -n 50
 | macOS   | Microsoft Remote Desktop      | Add PC → Host: `<IP>:<PORT>`           |
 | Linux   | xfreerdp                      | `xfreerdp /v:<IP> /port:<PORT>`        |
 
+## Troubleshooting
+
+**Black screen on connect** — ensure `~/.xsession` contains `xfce4-session`
+and restart xrdp: `sudo start-rdp --restart`
+
+**No IP found** — server may not have a network connection yet:
+`sudo start-rdp --wait`
+
+**Port conflict** — switch to a custom port:
+`sudo start-rdp --restart --port 3390`
+
+**xrdp won't start** — check logs:
+`sudo journalctl -u xrdp -n 50`
+
 ## License
-GNU GPL v3.0 or later
+GPL v2.0 or later

@@ -30,12 +30,12 @@ sudo ./install-rdp.sh
 ## Usage
 
 ```bash
-sudo start-rdp --status          # Show current status, IP, and connection info
-sudo start-rdp --restart         # Force restart xrdp
-sudo start-rdp --wait            # Wait for RFC1918 IP then start (useful at boot)
-sudo start-rdp --port 3390       # Use a custom port
-sudo start-rdp --restart --port 3390  # Restart on a custom port
-sudo start-rdp --help            # Show all options
+sudo start-rdp --status                # Show current status, IP, and connection info
+sudo start-rdp --restart               # Force restart xrdp
+sudo start-rdp --wait                  # Wait for RFC1918 IP then start (useful at boot)
+sudo start-rdp --port 3390             # Use a custom port
+sudo start-rdp --restart --port 3390   # Restart on a custom port
+sudo start-rdp --help                  # Show all options
 ```
 
 ## Logs
@@ -70,3 +70,4 @@ and restart xrdp: `sudo start-rdp --restart`
 
 ## License
 GPL v2.0 or later
+

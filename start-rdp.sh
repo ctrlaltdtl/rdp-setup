@@ -253,3 +253,4 @@ XRDP_UPTIME=$(systemctl show xrdp --property=ActiveEnterTimestamp \
 print_connection_info "$RFC1918_IP" "$RDP_PORT" "$STATUS ✅" "$XRDP_UPTIME"
 
 log "✅ RDP server ready at $RFC1918_IP:$RDP_PORT"
+

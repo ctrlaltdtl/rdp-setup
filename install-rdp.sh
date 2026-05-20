@@ -329,3 +329,4 @@ echo "  sudo journalctl -u xrdp-autostart -f"
 echo "  tail -f /var/log/start-rdp.log"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
+

@@ -44,7 +44,7 @@ CALLING_HOME=$(getent passwd "$CALLING_USER" | cut -d: -f6)
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  xRDP Auto-start Installer v2"
-echo "  Ubuntu 22.04 — xfce4 + xrdp"
+echo "  Ubuntu 22.04/24.04 — xfce4 + xrdp"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 log_info "Installing for user: $CALLING_USER ($CALLING_HOME)"
@@ -134,6 +134,20 @@ else
   log_warn "dbus-x11 not available in this release — skipping (not required)"
 fi
 
+# On Ubuntu 22.04 (jammy), Ubuntu Pro/ESM may pre-install libexo-2-0 at an ESM version
+# that conflicts with xfce4's dependency on the base jammy version (4.16.3-1).
+if [[ "$RELEASE" == "jammy" ]]; then
+  LIBEXO_VER=$(dpkg-query -W -f='${Version}' libexo-2-0 2>/dev/null || true)
+  if [[ "$LIBEXO_VER" == *esm* ]]; then
+    log_warn "ESM version of libexo-2-0 detected ($LIBEXO_VER) — downgrading for xfce4 compatibility"
+    if ! apt-get install -y --allow-downgrades libexo-2-0=4.16.3-1 2>&1; then
+      log_warn "libexo-2-0 downgrade failed — xfce4 install may fail with dependency errors"
+    else
+      log_info "libexo-2-0 downgraded to base jammy version (4.16.3-1)"
+    fi
+  fi
+fi
+
 if ! DEBIAN_FRONTEND=noninteractive apt-get install -y "${PACKAGES[@]}" 2>&1; then
   log_error "Package installation failed — see output above for details"
   exit 1
@@ -174,6 +188,12 @@ EOF
 chmod +x "$CALLING_HOME/.xsession"
 chown "$CALLING_USER:$CALLING_USER" "$CALLING_HOME/.xsession"
 log_info "Created $CALLING_HOME/.xsession"
+
+# Stale xfce4 session cache causes a black screen on first RDP connect.
+if [[ -d "$CALLING_HOME/.cache/sessions" ]]; then
+  rm -rf "$CALLING_HOME/.cache/sessions"
+  log_info "Cleared stale xfce4 session cache ($CALLING_HOME/.cache/sessions)"
+fi
 
 # ── Step 3: xrdp permissions ───────────────────────────────────────────────
 log_section "Step 3: Configuring xrdp permissions"
@@ -283,15 +303,36 @@ visudo -cf "$SUDOERS_FILE" \
   && log_info "Sudoers entry validated and installed" \
   || { log_error "Sudoers file invalid — removing"; rm -f "$SUDOERS_FILE"; }
 
-# ── Step 9: Log file ───────────────────────────────────────────────────────
-log_section "Step 9: Setting up log file"
+# ── Step 9: PAM faillock ───────────────────────────────────────────────────
+log_section "Step 9: PAM faillock check"
+
+# STIG hardening enables pam_faillock.so in common-auth. Reset any accumulated
+# failed-attempt counters so the RDP user isn't blocked at login.
+if command -v faillock &>/dev/null; then
+  if [[ -f /etc/security/faillock.conf ]]; then
+    if ! grep -qE '^deny\s*=\s*0' /etc/security/faillock.conf; then
+      log_warn "faillock.conf: deny is not 0 — repeated xrdp login failures may lock the account"
+      log_warn "Consider adding 'deny = 0' and 'unlock_time = 0' to /etc/security/faillock.conf"
+    else
+      log_info "faillock.conf: deny=0 confirmed"
+    fi
+  fi
+  faillock --user "$CALLING_USER" --reset 2>/dev/null \
+    && log_info "faillock counter reset for $CALLING_USER" \
+    || log_warn "faillock reset failed — run manually if login is blocked: faillock --user $CALLING_USER --reset"
+else
+  log_info "faillock not present — skipping"
+fi
+
+# ── Step 10: Log file ──────────────────────────────────────────────────────
+log_section "Step 10: Setting up log file"
 
 touch "$LOG_FILE"
 chmod 664 "$LOG_FILE"
 log_info "Log file ready: $LOG_FILE"
 
-# ── Step 10: Enable and start xrdp ────────────────────────────────────────
-log_section "Step 10: Enabling and starting xrdp"
+# ── Step 11: Enable and start xrdp ───────────────────────────────────────
+log_section "Step 11: Enabling and starting xrdp"
 
 systemctl enable xrdp
 systemctl start xrdp
@@ -303,8 +344,8 @@ else
   log_warn "xrdp did not start — check: sudo journalctl -u xrdp -n 50"
 fi
 
-# ── Step 11: Initial run ───────────────────────────────────────────────────
-log_section "Step 11: Running initial IP detection"
+# ── Step 12: Initial run ───────────────────────────────────────────────────
+log_section "Step 12: Running initial IP detection"
 
 "$INSTALL_DIR/$SCRIPT_NAME" || {
   log_warn "No RFC1918 IP detected yet — run 'sudo start-rdp --wait' once network is up"

@@ -19,12 +19,23 @@ IP_CACHE="/var/run/xrdp-server-ip"
 FORCE_RESTART=false
 WAIT_FOR_IP=false
 STATUS_ONLY=false
+RECOVER=false
+RECOVER_USER=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     --restart) FORCE_RESTART=true; shift ;;
     --wait)    WAIT_FOR_IP=true;   shift ;;
     --status)  STATUS_ONLY=true;   shift ;;
+    --recover) RECOVER=true;       shift ;;
+    --user)
+      if [[ -z "${2:-}" ]]; then
+        echo "❌ --user requires a username argument (e.g. --user rdp_user)"
+        exit 1
+      fi
+      RECOVER_USER="$2"
+      shift 2
+      ;;
     --port)
       if [[ -z "${2:-}" || ! "$2" =~ ^[0-9]+$ ]]; then
         echo "❌ --port requires a numeric argument (e.g. --port 3390)"
@@ -42,18 +53,21 @@ while [[ $# -gt 0 ]]; do
       echo "Usage: $0 [OPTIONS]"
       echo ""
       echo "Options:"
-      echo "  --restart        Force restart xrdp even if already running"
-      echo "  --wait           Retry until an RFC1918 IP is found (useful at boot)"
-      echo "  --port <PORT>    Custom RDP port (default: 3389, range: 1024-65535)"
-      echo "  --status         Show current connection info without restarting"
-      echo "  --help           Show this help message"
+      echo "  --restart            Force restart xrdp even if already running"
+      echo "  --wait               Retry until an RFC1918 IP is found (useful at boot)"
+      echo "  --port <PORT>        Custom RDP port (default: 3389, range: 1024-65535)"
+      echo "  --status             Show current connection info without restarting"
+      echo "  --recover            Clean up a stuck/locked RDP session and restart"
+      echo "  --user <USERNAME>    Username for --recover (resets faillock, kills Xorg)"
+      echo "  --help               Show this help message"
       echo ""
       echo "Examples:"
-      echo "  $0                          # Start with defaults"
-      echo "  $0 --status                 # Show current status only"
-      echo "  $0 --port 3390              # Use custom port"
-      echo "  $0 --restart --port 3390    # Restart on custom port"
-      echo "  $0 --wait --port 3390       # Wait for IP, use custom port"
+      echo "  $0                              # Start with defaults"
+      echo "  $0 --status                     # Show current status only"
+      echo "  $0 --port 3390                  # Use custom port"
+      echo "  $0 --restart --port 3390        # Restart on custom port"
+      echo "  $0 --wait --port 3390           # Wait for IP, use custom port"
+      echo "  $0 --recover --user rdp_user    # Recover after screen-lock lockout"
       exit 0
       ;;
     *)
@@ -161,6 +175,53 @@ if [[ "$STATUS_ONLY" == true ]]; then
 
   print_connection_info "$CACHED_IP" "$CACHED_PORT" "$XRDP_STATUS" "$XRDP_UPTIME"
   exit 0
+fi
+
+# ── Session recovery ───────────────────────────────────────────────────────
+# Symptom: screen-lock timeout → correct password rejected → can't unlock.
+# Cause:   xfce4 screen locker authenticates through PAM, which hits faillock;
+#          failed unlock attempts accumulate, blocking future logins. The hung
+#          Xorg/sesman state also prevents a clean re-connect.
+# Fix:     SSH in and run: sudo start-rdp --recover --user <username>
+if [[ "$RECOVER" == true ]]; then
+  log "🔧 Session recovery: cleaning up stuck RDP session..."
+
+  if [[ -n "$RECOVER_USER" ]]; then
+    # Reset PAM faillock — STIG hardening leaves pam_faillock.so active in
+    # common-auth; repeated screen-lock unlock attempts count as failures.
+    if command -v faillock &>/dev/null; then
+      faillock --user "$RECOVER_USER" --reset 2>/dev/null \
+        && log "   faillock counter reset for $RECOVER_USER" \
+        || log "   ⚠️  faillock reset failed for $RECOVER_USER"
+    fi
+    # Kill the user's Xorg session so xrdp can start a fresh one on reconnect.
+    pkill -u "$RECOVER_USER" Xorg 2>/dev/null \
+      && log "   Killed Xorg session for $RECOVER_USER" \
+      || log "   No Xorg session found for $RECOVER_USER"
+  else
+    log "   ⚠️  No --user specified — skipping faillock reset and Xorg kill"
+    log "      Run with: --recover --user <username>"
+  fi
+
+  # Kill sesman so it restarts cleanly on the next xrdp restart.
+  SESMAN_PID=$(cat /var/run/xrdp/xrdp-sesman.pid 2>/dev/null || true)
+  if [[ -n "$SESMAN_PID" ]]; then
+    kill "$SESMAN_PID" 2>/dev/null \
+      && log "   Killed xrdp-sesman (PID $SESMAN_PID)" \
+      || log "   ⚠️  Could not kill sesman PID $SESMAN_PID"
+  fi
+  sleep 1
+
+  # Remove stale X11 sockets — xrdp allocates displays :10 and up.
+  for sock in /tmp/.X11-unix/X1[0-9]; do
+    [[ -e "$sock" ]] && rm -f "$sock" && log "   Removed stale X11 socket: $sock"
+  done
+
+  # Remove xrdp temp files that can block a clean reconnect.
+  rm -f /tmp/.xrdp* 2>/dev/null && log "   Removed xrdp temp files"
+
+  FORCE_RESTART=true
+  log "🔧 Recovery cleanup done — restarting xrdp..."
 fi
 
 # ── Wait loop ──────────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 # xRDP Auto-start Setup v2
-Ubuntu 22.04 — xfce4 + xrdp with RFC1918 IP detection
+Ubuntu 22.04/24.04 — xfce4 + xrdp with RFC1918 IP detection
 
 ## Files
 - `install-rdp.sh` — One-shot installer (run this first)
@@ -67,6 +67,19 @@ and restart xrdp: `sudo start-rdp --restart`
 
 **xrdp won't start** — check logs:
 `sudo journalctl -u xrdp -n 50`
+
+**Login blocked after failed attempts (faillock/PAM)** — reset the counter:
+`faillock --user <username> --reset`
+If this recurs, ensure `/etc/security/faillock.conf` contains `deny = 0` and `unlock_time = 0`.
+
+**Screen lock → correct password rejected (can't unlock)** — the xfce4 screen locker
+authenticates through PAM/faillock, which accumulates failures and blocks the account.
+SSH into the server and run:
+```bash
+sudo start-rdp --recover --user <username>
+```
+This resets faillock, kills the hung Xorg/sesman state, cleans up stale X11 sockets,
+and restarts xrdp. Then reconnect from your RDP client.
 
 ## License
 GPL v2.0 or later

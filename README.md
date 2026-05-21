@@ -51,7 +51,7 @@ sudo journalctl -u xrdp -n 50
 | OS      | Client                        | Command / Notes                        |
 |---------|-------------------------------|----------------------------------------|
 | Windows | Built-in RDP (mstsc)          | `mstsc /v:<IP>:<PORT>`                 |
-| macOS   | Microsoft Remote Desktop      | Add PC → Host: `<IP>:<PORT>`           |
+| macOS   | Windows App                   | Add PC → Host: `<IP>:<PORT>`           |
 | Linux   | xfreerdp                      | `xfreerdp /v:<IP> /port:<PORT>`        |
 
 ## Troubleshooting

@@ -123,7 +123,7 @@ print_connection_info() {
   echo ""
   echo "  Client Connection Commands:"
   echo "  Windows : mstsc /v:$ip:$port"
-  echo "  macOS   : Add PC in Microsoft Remote Desktop"
+  echo "  macOS   : Add PC in Windows App"
   echo "            Host: $ip:$port"
   echo "  Linux   : xfreerdp /v:$ip /port:$port"
   echo ""

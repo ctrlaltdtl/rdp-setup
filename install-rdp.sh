@@ -378,18 +378,23 @@ log_info "xfce4-panel config written — first-run dialog suppressed"
 
 chown -R "$CALLING_USER:$CALLING_USER" "$CALLING_HOME/.config"
 
-# Kill the user's xfce4 session and xfconfd so the next RDP connection starts
-# fresh and reads the config we just wrote. Without this, xfconfd flushes its
-# in-memory cache back to disk on exit, overwriting our xfce4-panel.xml, and
-# the reconnected session resumes with the old panel layout.
+# Stop xrdp first so it releases its hold on the Xorg session before we kill
+# the session processes. Killing xfce4-session while xrdp is still running
+# leaves Xorg orphaned and causes xrdp to hang on the subsequent restart.
+systemctl stop xrdp 2>/dev/null || true
+
+# Now kill the user's xfce4 session so the next RDP connection starts fresh
+# and reads the config we just wrote. Without this, xfconfd flushes its
+# in-memory cache back to disk on exit, overwriting our xfce4-panel.xml.
 _session_killed=false
 pkill -KILL -u "$CALLING_USER" xfce4-session 2>/dev/null && _session_killed=true
 pkill -KILL -u "$CALLING_USER" xfconfd      2>/dev/null || true
 pkill -KILL -u "$CALLING_USER" xfce4-panel  2>/dev/null || true
+pkill -KILL -u "$CALLING_USER" Xorg         2>/dev/null || true
 if [[ "$_session_killed" == true ]]; then
-  log_info "Killed xfce4 session — reconnect via RDP to get fresh panel config"
+  log_info "Stopped xrdp and killed xfce4 session — will start fresh on next connect"
 else
-  log_info "No active xfce4 session — panel config will apply on next connect"
+  log_info "No active xfce4 session found"
 fi
 
 # ── Desktop icons ──────────────────────────────────────────────────────────

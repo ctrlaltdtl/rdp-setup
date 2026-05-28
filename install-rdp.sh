@@ -378,6 +378,15 @@ log_info "xfce4-panel config written — first-run dialog suppressed"
 
 chown -R "$CALLING_USER:$CALLING_USER" "$CALLING_HOME/.config"
 
+# Kill xfconfd with SIGKILL so it cannot flush its in-memory cache back to
+# disk and overwrite the config we just wrote. xfce4-session will restart it
+# on the next login, at which point it reads the fresh XML.
+if pkill -KILL -u "$CALLING_USER" xfconfd 2>/dev/null; then
+  log_info "Killed xfconfd (prevents stale cache overwriting panel config)"
+else
+  log_info "xfconfd not running — no cache flush risk"
+fi
+
 # ── Desktop icons ──────────────────────────────────────────────────────────
 mkdir -p "$CALLING_HOME/Desktop"
 

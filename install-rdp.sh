@@ -14,6 +14,7 @@ SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 SUDOERS_FILE="/etc/sudoers.d/rdp-autostart"
 LOG_FILE="/var/log/start-rdp.log"
 DEFAULT_PORT=3389
+SCREEN_LOCK_MINUTES=0    # 0 = disable screen lock entirely; set to minutes for a timeout
 
 # ── Colors ─────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -114,6 +115,50 @@ if [[ -d /apt ]] && [[ -z "$(ls -A /apt 2>/dev/null)" ]]; then
   log_info "Removed empty /apt directory"
 fi
 
+# Check SSH and login concurrency limits
+# On STIG-hardened systems these can prevent SSH and RDP from being active simultaneously.
+log_info "Checking SSH and PAM login concurrency limits..."
+
+# MaxSessions: number of channels per SSH connection (multiplexing), not total connections.
+# STIG often sets this to 1, which disables ControlMaster but does NOT block separate connections.
+MAX_SESSIONS=$(grep -rihE '^MaxSessions[[:space:]]' \
+  /etc/ssh/sshd_config /etc/ssh/sshd_config.d/ 2>/dev/null \
+  | awk '{print $2}' | tail -1 || echo "")
+if [[ -z "$MAX_SESSIONS" ]]; then
+  log_info "sshd MaxSessions: default (10) — parallel SSH connections OK"
+elif [[ "$MAX_SESSIONS" -le 1 ]]; then
+  log_warn "sshd MaxSessions=$MAX_SESSIONS — SSH multiplexing disabled; separate SSH connections still work"
+else
+  log_info "sshd MaxSessions=$MAX_SESSIONS — parallel SSH connections OK"
+fi
+
+# AllowUsers: if set, the calling user must be in the list or SSH login will be refused.
+SSH_ALLOW_USERS=$(grep -rihE '^AllowUsers[[:space:]]' \
+  /etc/ssh/sshd_config /etc/ssh/sshd_config.d/ 2>/dev/null \
+  | tail -1 | cut -d' ' -f2- || echo "")
+if [[ -n "$SSH_ALLOW_USERS" ]]; then
+  if echo " $SSH_ALLOW_USERS " | grep -qw "$CALLING_USER"; then
+    log_info "sshd AllowUsers: $CALLING_USER is permitted ✅"
+  else
+    log_warn "sshd AllowUsers is set but may not include $CALLING_USER"
+    log_warn "  AllowUsers: $SSH_ALLOW_USERS"
+  fi
+fi
+
+# PAM maxlogins: hard cap on concurrent login sessions system-wide.
+# If set to 1, SSH and RDP cannot be active at the same time — the second login is rejected.
+MAXLOGINS_VAL=$(awk '!/^[[:space:]]*#/ && /maxlogins/ {print $NF}' \
+  /etc/security/limits.conf 2>/dev/null | sort -n | head -1 || echo "")
+if [[ -z "$MAXLOGINS_VAL" ]]; then
+  log_info "PAM maxlogins: no limit set — SSH and RDP can run concurrently"
+elif [[ "$MAXLOGINS_VAL" -le 1 ]]; then
+  log_warn "PAM maxlogins=$MAXLOGINS_VAL — only 1 concurrent login session allowed!"
+  log_warn "  SSH + RDP CANNOT be active at the same time with this setting"
+  log_warn "  Fix: edit /etc/security/limits.conf and raise or remove the maxlogins line"
+else
+  log_info "PAM maxlogins=$MAXLOGINS_VAL — SSH and RDP can coexist"
+fi
+
 # ── Step 1: System update + package install ────────────────────────────────
 log_section "Step 1: Installing packages"
 
@@ -193,6 +238,62 @@ log_info "Created $CALLING_HOME/.xsession"
 if [[ -d "$CALLING_HOME/.cache/sessions" ]]; then
   rm -rf "$CALLING_HOME/.cache/sessions"
   log_info "Cleared stale xfce4 session cache ($CALLING_HOME/.cache/sessions)"
+fi
+
+# ── Screen lock config ─────────────────────────────────────────────────────
+log_section "Screen Lock: Configuring xfce4 screen timeout (${SCREEN_LOCK_MINUTES}min, 0=disabled)"
+
+XFCE_CONF_DIR="$CALLING_HOME/.config/xfce4/xfconf/xfce-perchannel-xml"
+mkdir -p "$XFCE_CONF_DIR"
+
+if [[ "$SCREEN_LOCK_MINUTES" -eq 0 ]]; then
+  _LOCK_ON="false"
+  _IDLE_DELAY=0
+else
+  _LOCK_ON="true"
+  _IDLE_DELAY="$SCREEN_LOCK_MINUTES"
+fi
+
+# xfce4-screensaver: controls the lock screen and idle activation
+cat > "$XFCE_CONF_DIR/xfce4-screensaver.xml" << XMLEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-screensaver" version="1.0">
+  <property name="saver" type="empty">
+    <property name="enabled" type="bool" value="$_LOCK_ON"/>
+    <property name="mode" type="int" value="0"/>
+    <property name="idle-activation" type="empty">
+      <property name="enabled" type="bool" value="$_LOCK_ON"/>
+      <property name="delay" type="int" value="$_IDLE_DELAY"/>
+    </property>
+  </property>
+  <property name="lock" type="empty">
+    <property name="enabled" type="bool" value="$_LOCK_ON"/>
+    <property name="saver-activation" type="empty">
+      <property name="enabled" type="bool" value="$_LOCK_ON"/>
+    </property>
+  </property>
+</channel>
+XMLEOF
+
+# xfce4-power-manager: disable screen blanking and DPMS (irrelevant for RDP but prevents blank surprise)
+cat > "$XFCE_CONF_DIR/xfce4-power-manager.xml" << XMLEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-power-manager" version="1.0">
+  <property name="xfce4-power-manager" type="empty">
+    <property name="blank-on-ac" type="int" value="$_IDLE_DELAY"/>
+    <property name="dpms-enabled" type="bool" value="false"/>
+    <property name="lock-screen-suspend-hibernate" type="bool" value="false"/>
+  </property>
+</channel>
+XMLEOF
+
+chown -R "$CALLING_USER:$CALLING_USER" "$CALLING_HOME/.config"
+
+if [[ "$SCREEN_LOCK_MINUTES" -eq 0 ]]; then
+  log_info "Screen lock: DISABLED — screen will not lock on idle"
+  log_warn "Re-run with SCREEN_LOCK_MINUTES=N to enable a timeout instead"
+else
+  log_info "Screen lock: timeout = ${SCREEN_LOCK_MINUTES} min (lock enabled)"
 fi
 
 # ── Step 3: xrdp permissions ───────────────────────────────────────────────

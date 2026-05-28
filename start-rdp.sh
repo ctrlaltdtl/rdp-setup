@@ -14,6 +14,7 @@ MAX_RETRIES=30
 LOG_FILE="/var/log/start-rdp.log"
 XRDP_CONFIG="/etc/xrdp/xrdp.ini"
 IP_CACHE="/var/run/xrdp-server-ip"
+REMMINA_PROFILE="/opt/rdp/rdp-server.remmina"
 
 # ── Parse arguments ────────────────────────────────────────────────────────
 FORCE_RESTART=false
@@ -105,6 +106,37 @@ get_current_port() {
   echo "$raw" | grep -oE '^[0-9]+' || echo "3389"
 }
 
+write_remmina_profile() {
+  local ip="$1"
+  local port="$2"
+  mkdir -p "$(dirname "$REMMINA_PROFILE")"
+  cat > "$REMMINA_PROFILE" << EOF
+[remmina]
+name=RDP Server ($ip)
+group=
+server=$ip:$port
+protocol=RDP
+username=
+password=
+domain=
+colordepth=32
+quality=2
+sound=local
+keyboard_grab=0
+viewmode=4
+scale=1
+resolution_mode=0
+ignore-tls-errors=1
+network=lan
+glyph-cache=1
+bitmap-cache=1
+offscreen-cache=1
+compression=1
+EOF
+  chmod 644 "$REMMINA_PROFILE"
+  log "📋 Remmina profile updated: $REMMINA_PROFILE"
+}
+
 print_connection_info() {
   local ip="$1"
   local port="$2"
@@ -122,10 +154,11 @@ print_connection_info() {
   echo "  Log file    : $LOG_FILE"
   echo ""
   echo "  Client Connection Commands:"
-  echo "  Windows : mstsc /v:$ip:$port"
-  echo "  macOS   : Add PC in Windows App"
-  echo "            Host: $ip:$port"
-  echo "  Linux   : xfreerdp /v:$ip /port:$port"
+  echo "  Windows          : mstsc /v:$ip:$port"
+  echo "  macOS            : Add PC in Windows App"
+  echo "                     Host: $ip:$port"
+  echo "  Linux (xfreerdp) : xfreerdp /v:$ip /port:$port /dynamic-resolution"
+  echo "  Linux (Remmina)  : remmina -c $REMMINA_PROFILE"
   echo ""
   echo "  On-demand commands:"
   echo "  sudo start-rdp --status"
@@ -304,8 +337,9 @@ if [[ "$STATUS" != "active" ]]; then
   exit 1
 fi
 
-# ── Cache IP:PORT ──────────────────────────────────────────────────────────
+# ── Cache IP:PORT and write Remmina profile ────────────────────────────────
 echo "$RFC1918_IP:$RDP_PORT" | tee "$IP_CACHE" > /dev/null
+write_remmina_profile "$RFC1918_IP" "$RDP_PORT"
 
 XRDP_UPTIME=$(systemctl show xrdp --property=ActiveEnterTimestamp \
   | cut -d= -f2 \

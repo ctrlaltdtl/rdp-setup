@@ -40,7 +40,16 @@ fi
 
 # ── Detect calling user ────────────────────────────────────────────────────
 CALLING_USER="${SUDO_USER:-$USER}"
+if [[ "$CALLING_USER" == "root" ]]; then
+  log_error "Run this script with sudo, not as root directly:"
+  log_error "  sudo ./install-rdp.sh"
+  exit 1
+fi
 CALLING_HOME=$(getent passwd "$CALLING_USER" | cut -d: -f6)
+if [[ -z "$CALLING_HOME" ]]; then
+  log_error "Could not determine home directory for user: $CALLING_USER"
+  exit 1
+fi
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -179,16 +188,37 @@ else
   log_warn "dbus-x11 not available in this release — skipping (not required)"
 fi
 
+# Polkit authentication agent — without one, GUI operations requiring elevation
+# (network manager, package manager, disk mounts) fail silently in the xfce4 session
+POLKIT_EXEC=""
+if apt-cache show xfce-polkit &>/dev/null; then
+  PACKAGES+=(xfce-polkit)
+  POLKIT_EXEC="/usr/libexec/xfce-polkit"
+  log_info "xfce-polkit available — adding to install list"
+elif apt-cache show policykit-1-gnome &>/dev/null; then
+  PACKAGES+=(policykit-1-gnome)
+  POLKIT_EXEC="/usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1"
+  log_info "policykit-1-gnome available — adding to install list"
+else
+  log_warn "No polkit agent found — GUI operations requiring elevation may fail silently"
+fi
+
 # On Ubuntu 22.04 (jammy), Ubuntu Pro/ESM may pre-install libexo-2-0 at an ESM version
 # that conflicts with xfce4's dependency on the base jammy version (4.16.3-1).
 if [[ "$RELEASE" == "jammy" ]]; then
   LIBEXO_VER=$(dpkg-query -W -f='${Version}' libexo-2-0 2>/dev/null || true)
   if [[ "$LIBEXO_VER" == *esm* ]]; then
     log_warn "ESM version of libexo-2-0 detected ($LIBEXO_VER) — downgrading for xfce4 compatibility"
-    if ! apt-get install -y --allow-downgrades libexo-2-0=4.16.3-1 2>&1; then
-      log_warn "libexo-2-0 downgrade failed — xfce4 install may fail with dependency errors"
+    LIBEXO_BASE=$(apt-cache policy libexo-2-0 2>/dev/null \
+      | grep -E '^\s+[0-9]' | awk '{print $1}' | grep -v esm | head -1 || echo "")
+    if [[ -n "$LIBEXO_BASE" ]]; then
+      if ! apt-get install -y --allow-downgrades "libexo-2-0=$LIBEXO_BASE" 2>&1; then
+        log_warn "libexo-2-0 downgrade to $LIBEXO_BASE failed — xfce4 install may fail"
+      else
+        log_info "libexo-2-0 downgraded to $LIBEXO_BASE"
+      fi
     else
-      log_info "libexo-2-0 downgraded to base jammy version (4.16.3-1)"
+      log_warn "No non-ESM version of libexo-2-0 found in apt cache — xfce4 install may fail"
     fi
   fi
 fi
@@ -205,6 +235,15 @@ if ! dpkg -l xrdp 2>/dev/null | grep -q "^ii"; then
 fi
 
 log_info "All packages installed successfully"
+
+# lightdm: xfce4 pulls in lightdm as a display manager dependency. On a headless
+# server it starts on VT7 and causes blank or failed RDP sessions.
+if systemctl list-unit-files lightdm.service 2>/dev/null | grep -q 'lightdm'; then
+  systemctl disable --now lightdm 2>/dev/null || true
+  log_info "lightdm disabled — prevents VT conflict with xrdp on headless server"
+else
+  log_info "lightdm: not installed — no conflict"
+fi
 
 # ── Step 2: Configure xfce4 as default session ────────────────────────────
 log_section "Step 2: Configuring xfce4 session"
@@ -233,6 +272,22 @@ EOF
 chmod +x "$CALLING_HOME/.xsession"
 chown "$CALLING_USER:$CALLING_USER" "$CALLING_HOME/.xsession"
 log_info "Created $CALLING_HOME/.xsession"
+
+# Polkit autostart — ensures the authentication agent launches with the xfce4 session
+if [[ -n "$POLKIT_EXEC" ]]; then
+  AUTOSTART_DIR="$CALLING_HOME/.config/autostart"
+  mkdir -p "$AUTOSTART_DIR"
+  cat > "$AUTOSTART_DIR/polkit-agent.desktop" << EOF
+[Desktop Entry]
+Type=Application
+Name=PolicyKit Authentication Agent
+Exec=$POLKIT_EXEC
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+EOF
+  chown -R "$CALLING_USER:$CALLING_USER" "$AUTOSTART_DIR"
+  log_info "Polkit agent autostart configured: $POLKIT_EXEC"
+fi
 
 # Stale xfce4 session cache causes a black screen on first RDP connect.
 if [[ -d "$CALLING_HOME/.cache/sessions" ]]; then
@@ -287,6 +342,36 @@ cat > "$XFCE_CONF_DIR/xfce4-power-manager.xml" << XMLEOF
 </channel>
 XMLEOF
 
+# xfce4-panel: pre-seeding a panel config suppresses the first-run dialog that
+# blocks the RDP session waiting for user input ("Use default panel configuration?")
+cat > "$XFCE_CONF_DIR/xfce4-panel.xml" << XMLEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-panel" version="1.0">
+  <property name="panels" type="array">
+    <value type="int" value="1"/>
+  </property>
+  <property name="panel-1" type="empty">
+    <property name="position" type="string" value="p=6;x=0;y=0"/>
+    <property name="length" type="uint" value="100"/>
+    <property name="position-locked" type="bool" value="false"/>
+    <property name="size" type="uint" value="30"/>
+    <property name="plugin-ids" type="array">
+      <value type="int" value="1"/>
+      <value type="int" value="2"/>
+      <value type="int" value="3"/>
+      <value type="int" value="4"/>
+    </property>
+  </property>
+  <property name="plugins" type="empty">
+    <property name="plugin-1" type="string" value="applicationsmenu"/>
+    <property name="plugin-2" type="string" value="tasklist"/>
+    <property name="plugin-3" type="string" value="separator"/>
+    <property name="plugin-4" type="string" value="clock"/>
+  </property>
+</channel>
+XMLEOF
+log_info "xfce4-panel config written — first-run dialog suppressed"
+
 chown -R "$CALLING_USER:$CALLING_USER" "$CALLING_HOME/.config"
 
 if [[ "$SCREEN_LOCK_MINUTES" -eq 0 ]]; then
@@ -302,6 +387,32 @@ log_section "Step 3: Configuring xrdp permissions"
 usermod -aG ssl-cert xrdp 2>/dev/null || true
 usermod -aG ssl-cert "$CALLING_USER" 2>/dev/null || true
 log_info "Added xrdp and $CALLING_USER to ssl-cert group"
+
+# ── TLS Certificate ────────────────────────────────────────────────────────
+log_section "TLS Certificate: Extending xrdp cert to 10 years"
+
+# xrdp generates a 1-year self-signed cert on install. After a year all clients
+# start warning or refusing. Regenerate now with a 10-year validity.
+XRDP_CERT="/etc/xrdp/cert.pem"
+XRDP_KEY="/etc/xrdp/key.pem"
+if [[ -f "$XRDP_CERT" ]] && [[ -f "$XRDP_KEY" ]] && command -v openssl &>/dev/null; then
+  CURRENT_EXPIRY=$(openssl x509 -enddate -noout -in "$XRDP_CERT" 2>/dev/null \
+    | cut -d= -f2 || echo "unknown")
+  log_info "Current cert expiry: $CURRENT_EXPIRY"
+  openssl req -x509 -newkey rsa:2048 \
+    -keyout "$XRDP_KEY" \
+    -out "$XRDP_CERT" \
+    -days 3650 \
+    -nodes \
+    -subj "/CN=$(hostname)/O=xRDP/C=US" 2>/dev/null \
+    && log_info "xrdp cert regenerated — valid 10 years from today" \
+    || log_warn "Cert regeneration failed — keeping existing cert (expires: $CURRENT_EXPIRY)"
+  chmod 640 "$XRDP_KEY"
+  chmod 644 "$XRDP_CERT"
+  chown root:ssl-cert "$XRDP_KEY" 2>/dev/null || true
+else
+  log_warn "xrdp cert/key not found or openssl missing — skipping cert extension"
+fi
 
 # ── Step 4: Fix xrdp.ini port value ───────────────────────────────────────
 log_section "Step 4: Normalizing xrdp.ini port"
@@ -333,10 +444,18 @@ if grep -q '^\[Xorg\]' "$XRDP_CONFIG"; then
   log_info "xrdp.ini [Xorg] port set to -1 (sesman dynamic)"
 fi
 
-# Ensure sesman listens on IPv6 to match xrdp's internal connection
+# Configure sesman ListenAddress — use :: (IPv6) if available, else 127.0.0.1.
+# STIG hardening often disables IPv6; binding to :: on such a system silently
+# prevents sesman from starting, which blocks all RDP session creation.
 if [[ -f /etc/xrdp/sesman.ini ]]; then
-  sed -i 's/^ListenAddress=.*/ListenAddress=::/' /etc/xrdp/sesman.ini
-  log_info "sesman.ini ListenAddress set to :: (IPv6)"
+  IPV6_DISABLED=$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || echo "0")
+  if [[ "$IPV6_DISABLED" == "1" ]]; then
+    log_warn "IPv6 is disabled — setting sesman ListenAddress=127.0.0.1"
+    sed -i 's/^ListenAddress=.*/ListenAddress=127.0.0.1/' /etc/xrdp/sesman.ini
+  else
+    sed -i 's/^ListenAddress=.*/ListenAddress=::/' /etc/xrdp/sesman.ini
+    log_info "sesman.ini ListenAddress set to :: (IPv6)"
+  fi
 fi
 
 # ── Step 5: Install start-rdp.sh ──────────────────────────────────────────
@@ -432,16 +551,31 @@ touch "$LOG_FILE"
 chmod 664 "$LOG_FILE"
 log_info "Log file ready: $LOG_FILE"
 
+cat > /etc/logrotate.d/start-rdp << 'EOF'
+/var/log/start-rdp.log {
+    weekly
+    rotate 4
+    compress
+    missingok
+    notifempty
+}
+EOF
+log_info "Log rotation configured: /etc/logrotate.d/start-rdp (weekly, 4 weeks)"
+
 # ── Step 11: Enable and start xrdp ───────────────────────────────────────
 log_section "Step 11: Enabling and starting xrdp"
 
 systemctl enable xrdp
 systemctl start xrdp
-sleep 2
 
-if systemctl is-active --quiet xrdp; then
-  log_info "xrdp is running"
-else
+for _i in $(seq 1 10); do
+  if systemctl is-active --quiet xrdp; then
+    log_info "xrdp is running"
+    break
+  fi
+  sleep 1
+done
+if ! systemctl is-active --quiet xrdp; then
   log_warn "xrdp did not start — check: sudo journalctl -u xrdp -n 50"
 fi
 

@@ -15,6 +15,7 @@ LOG_FILE="/var/log/start-rdp.log"
 XRDP_CONFIG="/etc/xrdp/xrdp.ini"
 IP_CACHE="/var/run/xrdp-server-ip"
 REMMINA_PROFILE="/opt/rdp/rdp-server.remmina"
+PREFERRED_IFACE=""    # Pin IP detection to a specific NIC (e.g. eth0) on multi-homed servers
 
 # ── Parse arguments ────────────────────────────────────────────────────────
 FORCE_RESTART=false
@@ -86,7 +87,9 @@ log() {
 }
 
 get_rfc1918_ip() {
-  ip -4 addr show \
+  local show_args=""
+  [[ -n "$PREFERRED_IFACE" ]] && show_args="dev $PREFERRED_IFACE"
+  ip -4 addr show $show_args 2>/dev/null \
     | awk '/inet / {print $2}' \
     | cut -d/ -f1 \
     | grep -E '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)' \
@@ -231,6 +234,13 @@ if [[ "$RECOVER" == true ]]; then
     pkill -u "$RECOVER_USER" Xorg 2>/dev/null \
       && log "   Killed Xorg session for $RECOVER_USER" \
       || log "   No Xorg session found for $RECOVER_USER"
+
+    # Kill lingering xfce4 processes — they survive Xorg dying and block a clean
+    # reconnect by holding locks or stale state from the previous session.
+    for _proc in xfce4-session xfce4-panel xfconfd xfce4-screensaver xfwm4; do
+      pkill -u "$RECOVER_USER" -x "$_proc" 2>/dev/null || true
+    done
+    log "   Cleaned up xfce4 session processes for $RECOVER_USER"
   else
     log "   ⚠️  No --user specified — skipping faillock reset and Xorg kill"
     log "      Run with: --recover --user <username>"
@@ -329,11 +339,15 @@ else
   systemctl start xrdp
 fi
 
-sleep 2
-STATUS=$(systemctl is-active xrdp)
+STATUS="inactive"
+for _i in $(seq 1 10); do
+  STATUS=$(systemctl is-active xrdp 2>/dev/null || echo "inactive")
+  [[ "$STATUS" == "active" ]] && break
+  sleep 1
+done
 
 if [[ "$STATUS" != "active" ]]; then
-  log "❌ xrdp failed to start. Check: sudo journalctl -u xrdp -n 50"
+  log "❌ xrdp failed to start (status: $STATUS). Check: sudo journalctl -u xrdp -n 50"
   exit 1
 fi
 

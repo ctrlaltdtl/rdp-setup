@@ -347,21 +347,22 @@ XMLEOF
 cat > "$XFCE_CONF_DIR/xfce4-panel.xml" << XMLEOF
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="xfce4-panel" version="1.0">
+  <property name="configver" type="int" value="2"/>
   <property name="panels" type="array">
     <value type="int" value="1"/>
-  </property>
-  <property name="panel-1" type="empty">
-    <property name="position" type="string" value="p=2;x=0;y=0"/>
-    <property name="length" type="uint" value="100"/>
-    <property name="position-locked" type="bool" value="true"/>
-    <property name="size" type="uint" value="28"/>
-    <property name="plugin-ids" type="array">
-      <value type="int" value="1"/>
-      <value type="int" value="2"/>
-      <value type="int" value="3"/>
-      <value type="int" value="4"/>
-      <value type="int" value="5"/>
-      <value type="int" value="6"/>
+    <property name="panel-1" type="empty">
+      <property name="position" type="string" value="p=2;x=0;y=0"/>
+      <property name="length" type="uint" value="100"/>
+      <property name="position-locked" type="bool" value="true"/>
+      <property name="size" type="uint" value="28"/>
+      <property name="plugin-ids" type="array">
+        <value type="int" value="1"/>
+        <value type="int" value="2"/>
+        <value type="int" value="3"/>
+        <value type="int" value="4"/>
+        <value type="int" value="5"/>
+        <value type="int" value="6"/>
+      </property>
     </property>
   </property>
   <property name="plugins" type="empty">

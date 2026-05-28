@@ -58,13 +58,19 @@ Edit the variables at the top of each script before running:
 - Writes `/etc/xrdp/startwm.sh` and `~/.xsession` to launch xfce4
 - Configures polkit agent autostart so GUI elevation prompts work in the session
 - Clears stale `~/.cache/sessions` that causes black screens on first connect
+- Places Firefox and xfce4-terminal launcher icons on `~/Desktop/`
+  (Firefox is detected from deb, snap, or ESR locations in that order)
+- On reinstall: stops xrdp and kills the running xfce4 session (xfce4-session,
+  xfconfd, xfce4-panel, Xorg) so the next RDP connect starts fresh with the
+  new config rather than resuming the old cached session
 
 **Screen lock**
 - Writes `xfce4-screensaver.xml`, `xfce4-power-manager.xml`, and `xfce4-panel.xml`
   to `~/.config/xfce4/xfconf/xfce-perchannel-xml/`
 - Default: screen lock disabled (`SCREEN_LOCK_MINUTES=0`) — avoids PAM/faillock
   lockout issues on STIG systems
-- Pre-seeds panel config to suppress the first-run dialog that blocks RDP sessions
+- Pre-seeds panel config: full-width top bar with app menu, window list, systray,
+  clock, and show-desktop
 
 **Step 3 — xrdp permissions**
 - Adds `xrdp` and the installing user to the `ssl-cert` group
@@ -156,6 +162,15 @@ faillock --user <username> --reset
 ```
 To prevent recurrence, add `deny = 0` and `unlock_time = 0` to
 `/etc/security/faillock.conf`.
+
+**Blank or floating panel after reinstall**
+xfconfd cached the old panel layout and the new session didn't start cleanly.
+The installer handles this automatically, but if it happens manually:
+```bash
+sudo pkill -KILL -u <username> xfce4-session
+```
+Then close the RDP window and reconnect — do not use `--restart`, which only
+restarts xrdp and leaves the xfce4 session running.
 
 **Stuck session after screen lock**
 If the screen lock was enabled (`SCREEN_LOCK_MINUTES > 0`) and the account is

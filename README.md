@@ -8,7 +8,7 @@ systems. Tested on Ubuntu 22.04 (jammy) and 24.04 (noble).
 
 | File | Purpose |
 |------|---------|
-| `install-rdp.sh` | One-shot installer — run this first as root via sudo |
+| `install-rdp.sh` | One-shot installer — run this first via sudo |
 | `start-rdp.sh` | Management script — installed automatically to `/opt/rdp/` |
 
 ## Installation
@@ -17,6 +17,11 @@ systems. Tested on Ubuntu 22.04 (jammy) and 24.04 (noble).
 chmod +x install-rdp.sh start-rdp.sh
 sudo ./install-rdp.sh
 ```
+
+> **Do not run as root directly** (`sudo su` then `./install-rdp.sh` will fail).
+> The installer must be invoked with `sudo` from your regular user account so it
+> knows which user's home directory and config to set up. Running as raw root
+> leaves `$SUDO_USER` unset and the installer will exit with an error.
 
 Both scripts must be in the same directory when the installer runs.
 

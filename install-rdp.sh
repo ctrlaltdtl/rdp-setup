@@ -351,28 +351,60 @@ cat > "$XFCE_CONF_DIR/xfce4-panel.xml" << XMLEOF
     <value type="int" value="1"/>
   </property>
   <property name="panel-1" type="empty">
-    <property name="position" type="string" value="p=6;x=0;y=0"/>
+    <property name="position" type="string" value="p=2;x=0;y=0"/>
     <property name="length" type="uint" value="100"/>
-    <property name="position-locked" type="bool" value="false"/>
-    <property name="size" type="uint" value="30"/>
+    <property name="position-locked" type="bool" value="true"/>
+    <property name="size" type="uint" value="28"/>
     <property name="plugin-ids" type="array">
       <value type="int" value="1"/>
       <value type="int" value="2"/>
       <value type="int" value="3"/>
       <value type="int" value="4"/>
+      <value type="int" value="5"/>
+      <value type="int" value="6"/>
     </property>
   </property>
   <property name="plugins" type="empty">
     <property name="plugin-1" type="string" value="applicationsmenu"/>
     <property name="plugin-2" type="string" value="tasklist"/>
     <property name="plugin-3" type="string" value="separator"/>
-    <property name="plugin-4" type="string" value="clock"/>
+    <property name="plugin-4" type="string" value="systray"/>
+    <property name="plugin-5" type="string" value="clock"/>
+    <property name="plugin-6" type="string" value="showdesktop"/>
   </property>
 </channel>
 XMLEOF
 log_info "xfce4-panel config written — first-run dialog suppressed"
 
 chown -R "$CALLING_USER:$CALLING_USER" "$CALLING_HOME/.config"
+
+# ── Desktop icons ──────────────────────────────────────────────────────────
+mkdir -p "$CALLING_HOME/Desktop"
+
+# Terminal
+if [[ -f /usr/share/applications/xfce4-terminal.desktop ]]; then
+  cp /usr/share/applications/xfce4-terminal.desktop "$CALLING_HOME/Desktop/"
+  chmod +x "$CALLING_HOME/Desktop/xfce4-terminal.desktop"
+  log_info "Desktop icon: xfce4-terminal"
+fi
+
+# Web browser — Firefox (deb, snap, or ESM fallback)
+_browser_found=false
+for _f in \
+  /usr/share/applications/firefox.desktop \
+  /var/lib/snapd/desktop/applications/firefox_firefox.desktop \
+  /usr/share/applications/firefox-esr.desktop; do
+  if [[ -f "$_f" ]]; then
+    cp "$_f" "$CALLING_HOME/Desktop/$(basename "$_f")"
+    chmod +x "$CALLING_HOME/Desktop/$(basename "$_f")"
+    log_info "Desktop icon: $(basename "$_f")"
+    _browser_found=true
+    break
+  fi
+done
+[[ "$_browser_found" == false ]] && log_warn "No Firefox .desktop found — browser icon skipped"
+
+chown -R "$CALLING_USER:$CALLING_USER" "$CALLING_HOME/Desktop"
 
 if [[ "$SCREEN_LOCK_MINUTES" -eq 0 ]]; then
   log_info "Screen lock: DISABLED — screen will not lock on idle"
